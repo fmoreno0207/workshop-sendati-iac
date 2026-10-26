@@ -14,6 +14,7 @@ locals {
     local.env_vars.locals.tags_base,
     {
       Componente = local.component
+      Uso        = "demo"
     }
   )
 }
