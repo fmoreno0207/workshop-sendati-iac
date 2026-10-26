@@ -1,4 +1,4 @@
-# Etapa 3: después del merge, planear solo los entornos tocados y aplicar ESE plan con aprobación manual.
+# Etapa 3: después del merge, planear UN entorno (solo lo tocado) y aplicar ESE plan con aprobación manual.
 name: Apply
 
 on:
@@ -6,14 +6,17 @@ on:
     branches: [main]
     paths:
       - "mi-project/**"
-      - ".github/**"
-  workflow_dispatch: # para generar un plan nuevo (obsoleto o pendiente)
+  workflow_dispatch: # para promover a otro entorno o regenerar un plan obsoleto
     inputs:
       entorno:
-        description: Entorno a planear y aplicar
+        description: Entorno
         type: choice
-        options: [todos, dev, qa]
-        default: todos
+        options: [dev, qa]
+        default: dev
+      unidad:
+        description: "Unidad (vacío = todas). Ej: ec2 (incluye sus dependencias)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -26,29 +29,30 @@ jobs:
   detectar:
     runs-on: ubuntu-latest
     outputs:
-      entornos: ${{ steps.entornos.outputs.lista }}
+      entorno: ${{ steps.que.outputs.entorno }}
+      filtros: ${{ steps.que.outputs.filtros }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - id: entornos
+      - id: que
         uses: ./.github/actions/entornos
         with:
           base: ${{ github.event.before }}
           entorno: ${{ inputs.entorno }}
+          unidad: ${{ inputs.unidad }}
+          compartido: nada
 
   plan:
     needs: detectar
-    if: needs.detectar.outputs.entornos != '[]'
+    if: needs.detectar.outputs.entorno != ''
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        entorno: ${{ fromJSON(needs.detectar.outputs.entornos) }}
+    env:
+      ENTORNO: ${{ needs.detectar.outputs.entorno }}
     steps:
       - uses: actions/checkout@v7
 
@@ -60,11 +64,11 @@ jobs:
       - id: plan
         uses: ./.github/actions/plan
         with:
-          entorno: ${{ matrix.entorno }}
+          entorno: ${{ needs.detectar.outputs.entorno }}
+          filtros: ${{ needs.detectar.outputs.filtros }}
 
       - name: Resumen
         env:
-          ENTORNO: ${{ matrix.entorno }}
           RESUMEN: ${{ steps.plan.outputs.resumen }}
         run: |
           printf '### Plan %s (commit %s)\n%s\nPlan completo: artefacto **plan-%s**.\n' \
@@ -73,32 +77,30 @@ jobs:
       - name: Plan en txt (descargable)
         uses: actions/upload-artifact@v7
         with:
-          name: plan-${{ matrix.entorno }}
-          path: plan-${{ matrix.entorno }}.txt
+          name: plan-${{ needs.detectar.outputs.entorno }}
+          path: plan-${{ needs.detectar.outputs.entorno }}.txt
           retention-days: 7
 
       - name: Planes binarios para el apply
         uses: actions/upload-artifact@v7
         with:
-          name: planes-${{ matrix.entorno }}
+          name: planes-${{ needs.detectar.outputs.entorno }}
           path: |
-            planes/${{ matrix.entorno }}
-            plan-${{ matrix.entorno }}.txt
-            mi-project/live/${{ matrix.entorno }}/*/.terraform.lock.hcl
+            planes/${{ needs.detectar.outputs.entorno }}
+            plan-${{ needs.detectar.outputs.entorno }}.txt
+            mi-project/live/${{ needs.detectar.outputs.entorno }}/*/.terraform.lock.hcl
           include-hidden-files: true
           retention-days: 7
 
   apply:
     needs: [detectar, plan]
     runs-on: ubuntu-latest
-    environment: ${{ matrix.entorno }} # acá frena y pide aprobación
+    environment: ${{ needs.detectar.outputs.entorno }} # acá frena y pide aprobación
     permissions:
       contents: read
       id-token: write
-    strategy:
-      fail-fast: false
-      matrix:
-        entorno: ${{ fromJSON(needs.detectar.outputs.entornos) }}
+    env:
+      ENTORNO: ${{ needs.detectar.outputs.entorno }}
     steps:
       - uses: actions/checkout@v7
 
@@ -109,39 +111,29 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          name: planes-${{ matrix.entorno }}
+          name: planes-${{ needs.detectar.outputs.entorno }}
           path: .
 
       - name: Plan aprobado
-        run: cat "plan-${{ matrix.entorno }}.txt"
+        run: cat "plan-$ENTORNO.txt"
 
       - name: terragrunt apply (mismo plan)
-        working-directory: mi-project/live/${{ matrix.entorno }}
+        working-directory: mi-project/live/${{ needs.detectar.outputs.entorno }}
         env:
-          PLANES: ${{ github.workspace }}/planes/${{ matrix.entorno }}
+          FILTROS: ${{ needs.detectar.outputs.filtros }}
+          PLANES: ${{ github.workspace }}/planes/${{ needs.detectar.outputs.entorno }}
           TG_NON_INTERACTIVE: "true"
           TG_NO_TIPS: "true"
           TG_PROVIDER_CACHE: "1"
         run: |
-          if [ -z "$(find "$PLANES" -name tfplan.tfplan)" ]; then
-            echo "Nada para aplicar."
-            exit 0
-          fi
+          # Mismas unidades que el plan.
+          args=()
+          while read -r f; do [ -n "$f" ] && args+=(--filter "$f"); done <<< "$FILTROS"
 
-          # Las unidades pendientes no tienen plan: se excluyen.
-          filtros=()
-          while read -r unidad; do
-            [ -n "$unidad" ] && filtros+=(--filter "!./$unidad")
-          done < "$PLANES/pendientes"
-
-          terragrunt run --all apply --out-dir "$PLANES" "${filtros[@]}" -- -input=false -no-color
-
-          if [ -s "$PLANES/pendientes" ]; then
-            echo "::warning::Quedó pendiente: $(paste -sd, "$PLANES/pendientes"). Corré de nuevo Actions → Apply → Run workflow."
-          fi
+          terragrunt run --all apply --out-dir "$PLANES" "${args[@]}" -- -input=false -no-color
 
       - name: Si falló
         if: failure()
         run: |
-          echo "### ❌ Apply \`${{ matrix.entorno }}\` falló" >> "$GITHUB_STEP_SUMMARY"
+          echo "### ❌ Apply \`$ENTORNO\` falló" >> "$GITHUB_STEP_SUMMARY"
           echo "Si dice **Saved plan is stale**, el state cambió: corré Actions → Apply → Run workflow y aprobá el plan nuevo." >> "$GITHUB_STEP_SUMMARY"

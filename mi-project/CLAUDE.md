@@ -19,7 +19,7 @@ mi-project/
 ├── Makefile                  # plan/apply/destroy (ENTORNO=dev|qa, UNIDAD=iam-ssm|ec2|dynamodb)
 ├── modules/{iam-ssm,ec2,dynamodb}/   # variables, data (si hace falta), main, outputs, README
 ├── modules/{eks,rds,ecr,alb}/        # vacíos a propósito (pendientes)
-├── live/root.hcl             # provider + backend S3; bucket = <prefijo>-<cuenta>-<región>-tfstate
+├── live/root.hcl             # provider + backend S3; bucket = <prefijo>-sendati-tfstate (workshop-sendati-tfstate)
 ├── live/{dev,qa}/env.hcl     # valores del entorno (lo único que cambia)
 └── live/{dev,qa}/{iam-ssm,ec2,dynamodb}/terragrunt.hcl  # ec2 → dependency iam-ssm (con mocks)
 ```
