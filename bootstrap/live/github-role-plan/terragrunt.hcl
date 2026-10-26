@@ -7,7 +7,6 @@ include "root" {
 locals {
   env    = read_terragrunt_config(find_in_parent_folders("env.hcl")).locals
   repo   = local.env.github_repo
-  oidc   = "arn:aws:iam::${local.env.cuenta}:oidc-provider/token.actions.githubusercontent.com"
   bucket = local.env.state_bucket
   tags   = merge(local.env.tags_base, { Componente = "github-plan" })
 }
@@ -19,8 +18,8 @@ terraform {
 dependency "oidc" {
   config_path = "../github-oidc"
 
-  # El ARN real es fijo: se usa para planear antes de crear el proveedor.
-  mock_outputs                            = { arn = local.oidc }
+  # Solo para planear antes de que exista el proveedor.
+  mock_outputs                            = { arn = "arn:aws:iam::mock:oidc-provider/token.actions.githubusercontent.com" }
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "show", "destroy"]
 }
 
