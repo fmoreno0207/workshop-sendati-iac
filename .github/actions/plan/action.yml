@@ -5,6 +5,10 @@ inputs:
   entorno:
     description: Entorno (dev o qa).
     required: true
+  filtros:
+    description: Un filtro de Terragrunt por línea (vacío = todas las unidades).
+    required: false
+    default: ""
 
 outputs:
   resumen:
@@ -20,29 +24,25 @@ runs:
       working-directory: mi-project/live/${{ inputs.entorno }}
       env:
         ENTORNO: ${{ inputs.entorno }}
+        FILTROS: ${{ inputs.filtros }}
         PLANES: ${{ github.workspace }}/planes/${{ inputs.entorno }}
         TXT: ${{ github.workspace }}/plan-${{ inputs.entorno }}.txt
         TG_NON_INTERACTIVE: "true"
         TG_NO_TIPS: "true"
         TG_PROVIDER_CACHE: "1"
       run: |
-        terragrunt run --all plan --out-dir "$PLANES" -- -input=false -no-color -lock-timeout=60s
+        args=()
+        while read -r f; do [ -n "$f" ] && args+=(--filter "$f"); done <<< "$FILTROS"
+
+        terragrunt run --all plan --out-dir "$PLANES" "${args[@]}" -- -input=false -no-color -lock-timeout=60s
 
         : > "$TXT"
-        : > "$PLANES/pendientes"
         resumen=""
         for plan in $(find "$PLANES" -name tfplan.tfplan | sort); do
           unidad=$(basename "$(dirname "$plan")")
           salida=$(cd "$unidad" && TG_TF_FORWARD_STDOUT=true terragrunt show -no-color "$plan")
           printf '===== %s/%s =====\n%s\n\n' "$ENTORNO" "$unidad" "$salida" >> "$TXT"
           linea=$(grep -m1 -E '^(Plan:|No changes\.)' <<< "$salida" || true)
-
-          # Usa valores de relleno (su dependencia todavía no existe): no se aplica en esta corrida.
-          if grep -q 'mock-' <<< "$salida"; then
-            rm "$plan"
-            echo "$unidad" >> "$PLANES/pendientes"
-            linea="$linea ⏳ pendiente: se aplica en la próxima corrida"
-          fi
           resumen+="- \`$unidad\`: $linea"$'\n'
         done
 
