@@ -1,20 +1,31 @@
-name: Entornos afectados
-description: Devuelve en JSON los entornos que tocó el cambio (ej. ["dev"]).
+name: Qué desplegar
+description: A partir del cambio, decide UN entorno y qué unidades (filtros de Terragrunt).
 
 inputs:
   base:
-    description: Commit contra el que se compara. Vacío = todos.
+    description: Commit contra el que se compara.
     required: false
     default: ""
   entorno:
-    description: Entorno pedido a mano (todos, dev, qa...). Gana sobre base.
+    description: Entorno pedido a mano (gana sobre base).
     required: false
     default: ""
+  unidad:
+    description: Unidad pedida a mano (vacío = todas).
+    required: false
+    default: ""
+  compartido:
+    description: Qué hacer si solo cambió algo compartido. "dev" = planear dev, "nada" = no desplegar.
+    required: false
+    default: dev
 
 outputs:
-  lista:
-    description: Entornos en JSON.
-    value: ${{ steps.detectar.outputs.lista }}
+  entorno:
+    description: Entorno a desplegar (vacío = nada).
+    value: ${{ steps.detectar.outputs.entorno }}
+  filtros:
+    description: Un filtro de Terragrunt por línea (vacío = todas las unidades).
+    value: ${{ steps.detectar.outputs.filtros }}
 
 runs:
   using: composite
@@ -24,25 +35,47 @@ runs:
       env:
         BASE: ${{ inputs.base }}
         ENTORNO: ${{ inputs.entorno }}
+        UNIDAD: ${{ inputs.unidad }}
+        SI_COMPARTIDO: ${{ inputs.compartido }}
       run: |
-        # Entornos = carpetas de mi-project/live con env.hcl.
-        todos=$(for f in mi-project/live/*/env.hcl; do basename "$(dirname "$f")"; done | jq -Rsc 'split("\n") | map(select(. != ""))')
+        # Entornos válidos = carpetas de mi-project/live con env.hcl.
+        entornos=$(for f in mi-project/live/*/env.hcl; do basename "$(dirname "$f")"; done)
+        entorno=""
+        filtros=""
 
         if [ -n "$ENTORNO" ]; then
-          if [ "$ENTORNO" = "todos" ]; then lista=$todos; else lista=$(jq -c --arg e "$ENTORNO" 'map(select(. == $e))' <<< "$todos"); fi
-        elif [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
-          lista=$todos
-        else
+          # Pedido a mano (Run workflow).
+          grep -qx "$ENTORNO" <<< "$entornos" || { echo "::error::No existe el entorno $ENTORNO"; exit 1; }
+          entorno=$ENTORNO
+          [ -n "$UNIDAD" ] && filtros="./$UNIDAD..."
+        elif [ -n "$BASE" ] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
           cambios=$(git diff --name-only "$BASE" HEAD)
           echo "Archivos cambiados:"; echo "$cambios"
-          # Lo compartido afecta a todos los entornos.
-          if grep -qE '^(mi-project/(modules/|live/root\.hcl|\.terraform-version|\.terragrunt-version)|\.github/)' <<< "$cambios"; then
-            lista=$todos
-          else
-            lista=$({ grep -oE '^mi-project/live/[^/]+/' <<< "$cambios" || true; } | cut -d/ -f3 | sort -u \
-              | jq -Rsc --argjson todos "$todos" 'split("\n") | map(select(. != "" and (. as $e | $todos | index($e))))')
+
+          tocados=$({ grep -oE '^mi-project/live/[^/]+/' <<< "$cambios" || true; } | cut -d/ -f3 | sort -u | { grep -xF "$entornos" || true; })
+          compartido=$({ grep -E '^mi-project/(modules/|live/root\.hcl|\.terraform-version|\.terragrunt-version)' <<< "$cambios" || true; })
+
+          if [ "$(wc -w <<< "$tocados")" -gt 1 ]; then
+            echo "::error::El cambio toca más de un entorno: ${tocados//$'\n'/ }. Un PR = un entorno."
+            exit 1
+          fi
+
+          entorno=$tocados
+          # Solo cambió algo compartido (módulos, root.hcl, versiones): el PR muestra dev,
+          # pero después del merge no se aplica solo (se elige entorno con Run workflow).
+          if [ -z "$entorno" ] && [ -n "$compartido" ] && [ "$SI_COMPARTIDO" = "dev" ]; then entorno=dev; fi
+
+          # Solo las unidades tocadas y sus dependencias. Si cambió env.hcl o algo compartido: todas.
+          if [ -n "$entorno" ] && [ -z "$compartido" ] && ! grep -qx "mi-project/live/$entorno/env.hcl" <<< "$cambios"; then
+            filtros=$({ grep -oE "^mi-project/live/$entorno/[^/]+/" <<< "$cambios" || true; } | cut -d/ -f4 | sort -u | sed 's|.*|./&...|')
           fi
         fi
 
-        echo "Entornos: $lista"
-        echo "lista=$lista" >> "$GITHUB_OUTPUT"
+        lista=${filtros:-todas}
+        echo "Entorno: ${entorno:-ninguno} | Unidades: ${lista//$'\n'/ }"
+        echo "entorno=$entorno" >> "$GITHUB_OUTPUT"
+        {
+          echo "filtros<<FIN"
+          echo "$filtros"
+          echo "FIN"
+        } >> "$GITHUB_OUTPUT"

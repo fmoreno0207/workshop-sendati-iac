@@ -14,9 +14,19 @@ Infraestructura del workshop (Terraform + Terragrunt en AWS) con pipeline de Git
 rama → PR → validar + plan → revisión → merge → plan → ✋ aprobación → apply
 ```
 
-- **Solo corre el entorno que tocaste**: cambio en `mi-project/live/dev/` → solo dev. Cambio en `modules/`, `root.hcl` o `.github/` → todos. Solo README o `bootstrap/` → nada.
-- **PR** (`pr.yml`): `fmt`, `init -backend=false`, `validate` y `plan`. Comenta el resumen en el PR y deja el plan en txt (artefacto `plan-dev` / `plan-qa`). **Nunca aplica.**
-- **Merge a main** (`apply.yml`): plan nuevo → frena en el environment (`dev` / `qa`) hasta que alguien apruebe → aplica **ese mismo plan**.
+**Qué se planea y aplica** (siempre **un solo entorno** por corrida):
+
+| Si cambiás… | Se planea y aplica |
+|---|---|
+| `mi-project/live/dev/ec2/` | solo `ec2` (y lo que necesita: `iam-ssm`) en dev |
+| `mi-project/live/dev/env.hcl` | todo dev |
+| `dev` y `qa` en el mismo PR | ❌ falla: un PR = un entorno |
+| `modules/`, `live/root.hcl`, versiones | el PR muestra el plan de dev; **después del merge no se aplica solo** → *Run workflow* |
+| `.github/`, README, `bootstrap/` | nada |
+
+- **PR** (`pr.yml`): `fmt`, `init -backend=false`, `validate` y `plan`. Comenta el resumen en el PR y deja el plan en txt (artefacto `plan-dev`). **Nunca aplica.**
+- **Merge a main** (`apply.yml`): plan nuevo → frena en el environment hasta que alguien apruebe → aplica **ese mismo plan**.
+- **Run workflow** (`apply.yml` a mano): elegís entorno y, si querés, una unidad (ej. `ec2`). Sirve para promover a qa o para cambios compartidos.
 
 ## Puesta en marcha (una vez)
 
@@ -52,10 +62,8 @@ rama → PR → validar + plan → revisión → merge → plan → ✋ aprobaci
 1. `git switch -c mi-cambio` → cambiar algo en `mi-project/` → `git push` → abrir PR.
 2. Mirar el comentario del plan en el PR. El detalle completo está en el txt: *Actions → la corrida → Artifacts → plan-dev*.
 3. Merge.
-4. *Actions → Apply → Review deployments* → mirar el plan (está en el resumen y en el artefacto) → **Approve**.
-5. Si falla con `Saved plan is stale`, o quedó algo ⏳ pendiente: *Actions → Apply → Run workflow* (elegís el entorno) y aprobar el plan nuevo.
-
-> La primera vez, `ec2` queda ⏳ pendiente porque su rol (`iam-ssm`) todavía no existe. Se aplica en la segunda corrida.
+4. *Actions → Apply → Review deployments* → mirar el plan (resumen y artefacto) → **Approve and deploy**.
+5. Si falla con `Saved plan is stale`: *Actions → Apply → Run workflow* (entorno y unidad) y aprobar el plan nuevo.
 
 ## Seguridad
 
