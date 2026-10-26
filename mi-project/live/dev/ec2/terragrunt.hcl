@@ -27,7 +27,8 @@ dependency "iam_ssm" {
 
   # Para poder hacer plan antes de que exista iam-ssm. El pipeline no aplica planes con "mock-".
   mock_outputs = {
-    instance_profile_name = "mock-instance-profile"
+    instance_profile_name = "${local.env_vars.locals.name_prefix}-${local.env_vars.locals.environment}-ssm-profile"
+
   }
   mock_outputs_allowed_terraform_commands = ["init", "validate", "plan", "show", "destroy"]
 }
