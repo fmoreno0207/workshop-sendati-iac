@@ -1,0 +1,153 @@
+# Destruir unidades de UN entorno. Solo a mano, con confirmación y aprobación. Destruye ESE plan.
+name: Destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      entorno:
+        description: Entorno
+        type: choice
+        options: [dev, qa]
+        default: dev
+      unidades:
+        description: "Unidades separadas por espacio (ej: ec2 dynamodb) o 'todas'. Incluye las que dependen de ellas."
+        type: string
+        required: true
+      confirmar:
+        description: Escribí el nombre del entorno para confirmar
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apply # nunca en paralelo con un apply
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ENTORNO: ${{ inputs.entorno }}
+    outputs:
+      filtros: ${{ steps.filtros.outputs.filtros }}
+    steps:
+      - name: Confirmación
+        env:
+          CONFIRMAR: ${{ inputs.confirmar }}
+        run: |
+          [ "$CONFIRMAR" = "$ENTORNO" ] || { echo "::error::Para confirmar escribí: $ENTORNO"; exit 1; }
+
+      - uses: actions/checkout@v7
+
+      - name: Qué se destruye
+        id: filtros
+        env:
+          UNIDADES: ${{ inputs.unidades }}
+        run: |
+          # Cada unidad junto con las que dependen de ella (...unidad).
+          filtros=""
+          if [ "$UNIDADES" != "todas" ]; then
+            for u in $UNIDADES; do
+              [ -d "mi-project/live/$ENTORNO/$u" ] || { echo "::error::No existe la unidad $u en $ENTORNO"; exit 1; }
+              filtros+="...$u"$'\n'
+            done
+          fi
+          {
+            echo "filtros<<FIN"
+            printf '%s' "$filtros"
+            echo "FIN"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup
+        with:
+          role-arn: ${{ vars.AWS_ROLE_PLAN_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - id: plan
+        uses: ./.github/actions/plan
+        with:
+          entorno: ${{ inputs.entorno }}
+          filtros: ${{ steps.filtros.outputs.filtros }}
+          destruir: "true"
+
+      - name: Resumen
+        env:
+          RESUMEN: ${{ steps.plan.outputs.resumen }}
+        run: |
+          printf '### 🗑️ Destroy %s (commit %s)\n%s\nPlan completo: artefacto **plan-%s**.\n' \
+            "$ENTORNO" "${GITHUB_SHA::7}" "$RESUMEN" "$ENTORNO" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Plan en txt (descargable)
+        uses: actions/upload-artifact@v7
+        with:
+          name: plan-${{ inputs.entorno }}
+          path: plan-${{ inputs.entorno }}.txt
+          retention-days: 7
+
+      - name: Planes binarios para el destroy
+        uses: actions/upload-artifact@v7
+        with:
+          name: planes-${{ inputs.entorno }}
+          path: |
+            planes/${{ inputs.entorno }}
+            plan-${{ inputs.entorno }}.txt
+            mi-project/live/${{ inputs.entorno }}/*/.terraform.lock.hcl
+          include-hidden-files: true
+          retention-days: 7
+
+  destroy:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.entorno }} # acá frena y pide aprobación
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ENTORNO: ${{ inputs.entorno }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+        with:
+          role-arn: ${{ vars.AWS_ROLE_APPLY_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: planes-${{ inputs.entorno }}
+          path: .
+
+      - name: Plan aprobado
+        run: cat "plan-$ENTORNO.txt"
+
+      - name: Destruir (mismo plan, al revés del orden de creación)
+        working-directory: mi-project/live/${{ inputs.entorno }}
+        env:
+          FILTROS: ${{ needs.plan.outputs.filtros }}
+          PLANES: ${{ github.workspace }}/planes/${{ inputs.entorno }}
+          TG_NON_INTERACTIVE: "true"
+          TG_NO_TIPS: "true"
+          TG_PROVIDER_CACHE: "1"
+        run: |
+          args=()
+          while read -r f; do [ -n "$f" ] && args+=(--filter "$f"); done <<< "$FILTROS"
+
+          # Primero lo que depende (ej. ec2) y después su dependencia (ej. iam-ssm).
+          for u in $(terragrunt list --no-color --dag "${args[@]}" | tr -s ' \t' '\n' | tac); do
+            plan="$PLANES/$u/tfplan.tfplan"
+            [ -f "$plan" ] || continue
+            echo "::group::destroy $u"
+            (cd "$u" && terragrunt apply -input=false -no-color "$plan")
+            echo "::endgroup::"
+          done
+
+      - name: Si falló
+        if: failure()
+        run: |
+          echo "### ❌ Destroy \`$ENTORNO\` falló" >> "$GITHUB_STEP_SUMMARY"
+          echo "Si dice **Saved plan is stale**, el state cambió: corré Destroy de nuevo y aprobá el plan nuevo." >> "$GITHUB_STEP_SUMMARY"
