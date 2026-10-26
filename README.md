@@ -65,6 +65,16 @@ rama → PR → validar + plan → revisión → merge → plan → ✋ aprobaci
 4. *Actions → Apply → Review deployments* → mirar el plan (resumen y artefacto) → **Approve and deploy**.
 5. Si falla con `Saved plan is stale`: *Actions → Apply → Run workflow* (entorno y unidad) y aprobar el plan nuevo.
 
+## Destroy (borrar)
+
+Workflow aparte, **solo manual**: *Actions → Destroy → Run workflow*.
+
+1. Elegís el entorno, las unidades (ej. `ec2 dynamodb`, o `todas`) y escribís el nombre del entorno para confirmar.
+2. Se muestra el plan de destrucción (resumen + artefacto `plan-<entorno>`).
+3. **Review deployments → Approve** → destruye **ese** plan.
+
+Si pedís `iam-ssm`, también se borra `ec2`, porque depende de él. Se borra primero lo que depende.
+
 ## Seguridad
 
 - Sin claves en el repo: GitHub entra a AWS por OIDC.

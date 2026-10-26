@@ -9,6 +9,10 @@ inputs:
     description: Un filtro de Terragrunt por línea (vacío = todas las unidades).
     required: false
     default: ""
+  destruir:
+    description: '"true" = plan de destrucción (-destroy).'
+    required: false
+    default: "false"
 
 outputs:
   resumen:
@@ -25,6 +29,7 @@ runs:
       env:
         ENTORNO: ${{ inputs.entorno }}
         FILTROS: ${{ inputs.filtros }}
+        DESTRUIR: ${{ inputs.destruir }}
         PLANES: ${{ github.workspace }}/planes/${{ inputs.entorno }}
         TXT: ${{ github.workspace }}/plan-${{ inputs.entorno }}.txt
         TG_NON_INTERACTIVE: "true"
@@ -33,8 +38,10 @@ runs:
       run: |
         args=()
         while read -r f; do [ -n "$f" ] && args+=(--filter "$f"); done <<< "$FILTROS"
+        extra=()
+        [ "$DESTRUIR" = "true" ] && extra+=(-destroy)
 
-        terragrunt run --all plan --out-dir "$PLANES" "${args[@]}" -- -input=false -no-color -lock-timeout=60s
+        terragrunt run --all plan --out-dir "$PLANES" "${args[@]}" -- -input=false -no-color -lock-timeout=60s "${extra[@]}"
 
         : > "$TXT"
         resumen=""
