@@ -6,7 +6,6 @@ include "root" {
 
 locals {
   env    = read_terragrunt_config(find_in_parent_folders("env.hcl")).locals
-  repo   = local.env.github_repo
   bucket = local.env.state_bucket
   tags   = merge(local.env.tags_base, { Componente = "github-plan" })
 }
@@ -28,8 +27,8 @@ inputs = {
   oidc_provider_arn = dependency.oidc.outputs.arn
 
   sujetos = [
-    "repo:${local.repo}:pull_request",
-    "repo:${local.repo}:ref:refs/heads/main",
+    "${local.env.github_sub}:pull_request",
+    "${local.env.github_sub}:ref:refs/heads/main",
   ]
 
   politicas = ["ReadOnlyAccess"]

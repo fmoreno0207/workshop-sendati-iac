@@ -6,7 +6,6 @@ include "root" {
 
 locals {
   env     = read_terragrunt_config(find_in_parent_folders("env.hcl")).locals
-  repo    = local.env.github_repo
   region  = local.env.region
   prefijo = local.env.name_prefix
   tags    = merge(local.env.tags_base, { Componente = "github-apply" })
@@ -32,7 +31,7 @@ inputs = {
   nombre            = "${local.prefijo}-github-apply"
   oidc_provider_arn = dependency.oidc.outputs.arn
 
-  sujetos = [for e in local.env.entornos : "repo:${local.repo}:environment:${e}"]
+  sujetos = [for e in local.env.entornos : "${local.env.github_sub}:environment:${e}"]
 
   politicas = ["ReadOnlyAccess"]
 
