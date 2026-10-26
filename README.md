@@ -14,7 +14,8 @@ Infraestructura del workshop (Terraform + Terragrunt en AWS) con pipeline de Git
 rama → PR → validar + plan → revisión → merge → plan → ✋ aprobación → apply
 ```
 
-- **PR** (`pr.yml`): `fmt`, `init -backend=false`, `validate` y `plan` de dev y qa. Comenta el resumen en el PR y deja el plan en txt (artefacto `plan-dev` / `plan-qa`). **Nunca aplica.**
+- **Solo corre el entorno que tocaste**: cambio en `mi-project/live/dev/` → solo dev. Cambio en `modules/`, `root.hcl` o `.github/` → todos. Solo README o `bootstrap/` → nada.
+- **PR** (`pr.yml`): `fmt`, `init -backend=false`, `validate` y `plan`. Comenta el resumen en el PR y deja el plan en txt (artefacto `plan-dev` / `plan-qa`). **Nunca aplica.**
 - **Merge a main** (`apply.yml`): plan nuevo → frena en el environment (`dev` / `qa`) hasta que alguien apruebe → aplica **ese mismo plan**.
 
 ## Puesta en marcha (una vez)
@@ -43,7 +44,7 @@ rama → PR → validar + plan → revisión → merge → plan → ✋ aprobaci
 
 5. **Settings → Rules → New branch ruleset** sobre `main`:
    - *Require a pull request before merging* (si estás solo, aprobaciones = 0).
-   - *Require status checks*: `validar`, `plan (dev)`, `plan (qa)`.
+   - *Require status checks*: `validar` y `plan-ok`.
    - *Block force pushes*.
 
 ## Uso
@@ -52,7 +53,7 @@ rama → PR → validar + plan → revisión → merge → plan → ✋ aprobaci
 2. Mirar el comentario del plan en el PR. El detalle completo está en el txt: *Actions → la corrida → Artifacts → plan-dev*.
 3. Merge.
 4. *Actions → Apply → Review deployments* → mirar el plan (está en el resumen y en el artefacto) → **Approve**.
-5. Si falla con `Saved plan is stale`, o quedó algo ⏳ pendiente: *Actions → Apply → Run workflow* y aprobar el plan nuevo.
+5. Si falla con `Saved plan is stale`, o quedó algo ⏳ pendiente: *Actions → Apply → Run workflow* (elegís el entorno) y aprobar el plan nuevo.
 
 > La primera vez, `ec2` queda ⏳ pendiente porque su rol (`iam-ssm`) todavía no existe. Se aplica en la segunda corrida.
 

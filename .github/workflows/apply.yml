@@ -1,4 +1,4 @@
-# Etapa 3: después del merge, planear y aplicar ESE plan solo con aprobación manual.
+# Etapa 3: después del merge, planear solo los entornos tocados y aplicar ESE plan con aprobación manual.
 name: Apply
 
 on:
@@ -8,6 +8,12 @@ on:
       - "mi-project/**"
       - ".github/**"
   workflow_dispatch: # para generar un plan nuevo (obsoleto o pendiente)
+    inputs:
+      entorno:
+        description: Entorno a planear y aplicar
+        type: choice
+        options: [todos, dev, qa]
+        default: todos
 
 permissions:
   contents: read
@@ -17,7 +23,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  detectar:
+    runs-on: ubuntu-latest
+    outputs:
+      entornos: ${{ steps.entornos.outputs.lista }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - id: entornos
+        uses: ./.github/actions/entornos
+        with:
+          base: ${{ github.event.before }}
+          entorno: ${{ inputs.entorno }}
+
   plan:
+    needs: detectar
+    if: needs.detectar.outputs.entornos != '[]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -25,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        entorno: [dev, qa]
+        entorno: ${{ fromJSON(needs.detectar.outputs.entornos) }}
     steps:
       - uses: actions/checkout@v7
 
@@ -66,7 +89,7 @@ jobs:
           retention-days: 7
 
   apply:
-    needs: plan
+    needs: [detectar, plan]
     runs-on: ubuntu-latest
     environment: ${{ matrix.entorno }} # acá frena y pide aprobación
     permissions:
@@ -75,7 +98,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        entorno: [dev, qa]
+        entorno: ${{ fromJSON(needs.detectar.outputs.entornos) }}
     steps:
       - uses: actions/checkout@v7
 

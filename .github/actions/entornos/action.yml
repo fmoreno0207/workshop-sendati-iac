@@ -1,0 +1,48 @@
+name: Entornos afectados
+description: Devuelve en JSON los entornos que tocó el cambio (ej. ["dev"]).
+
+inputs:
+  base:
+    description: Commit contra el que se compara. Vacío = todos.
+    required: false
+    default: ""
+  entorno:
+    description: Entorno pedido a mano (todos, dev, qa...). Gana sobre base.
+    required: false
+    default: ""
+
+outputs:
+  lista:
+    description: Entornos en JSON.
+    value: ${{ steps.detectar.outputs.lista }}
+
+runs:
+  using: composite
+  steps:
+    - id: detectar
+      shell: bash
+      env:
+        BASE: ${{ inputs.base }}
+        ENTORNO: ${{ inputs.entorno }}
+      run: |
+        # Entornos = carpetas de mi-project/live con env.hcl.
+        todos=$(for f in mi-project/live/*/env.hcl; do basename "$(dirname "$f")"; done | jq -Rsc 'split("\n") | map(select(. != ""))')
+
+        if [ -n "$ENTORNO" ]; then
+          if [ "$ENTORNO" = "todos" ]; then lista=$todos; else lista=$(jq -c --arg e "$ENTORNO" 'map(select(. == $e))' <<< "$todos"); fi
+        elif [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+          lista=$todos
+        else
+          cambios=$(git diff --name-only "$BASE" HEAD)
+          echo "Archivos cambiados:"; echo "$cambios"
+          # Lo compartido afecta a todos los entornos.
+          if grep -qE '^(mi-project/(modules/|live/root\.hcl|\.terraform-version|\.terragrunt-version)|\.github/)' <<< "$cambios"; then
+            lista=$todos
+          else
+            lista=$({ grep -oE '^mi-project/live/[^/]+/' <<< "$cambios" || true; } | cut -d/ -f3 | sort -u \
+              | jq -Rsc --argjson todos "$todos" 'split("\n") | map(select(. != "" and (. as $e | $todos | index($e))))')
+          fi
+        fi
+
+        echo "Entornos: $lista"
+        echo "lista=$lista" >> "$GITHUB_OUTPUT"
