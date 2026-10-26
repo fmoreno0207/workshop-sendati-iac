@@ -1,0 +1,124 @@
+# Etapa 3: después del merge, planear y aplicar ESE plan solo con aprobación manual.
+name: Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mi-project/**"
+      - ".github/**"
+  workflow_dispatch: # para generar un plan nuevo (obsoleto o pendiente)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apply
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        entorno: [dev, qa]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+        with:
+          role-arn: ${{ vars.AWS_ROLE_PLAN_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - id: plan
+        uses: ./.github/actions/plan
+        with:
+          entorno: ${{ matrix.entorno }}
+
+      - name: Resumen
+        env:
+          ENTORNO: ${{ matrix.entorno }}
+          RESUMEN: ${{ steps.plan.outputs.resumen }}
+        run: |
+          printf '### Plan %s (commit %s)\n%s\nPlan completo: artefacto **plan-%s**.\n' \
+            "$ENTORNO" "${GITHUB_SHA::7}" "$RESUMEN" "$ENTORNO" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Plan en txt (descargable)
+        uses: actions/upload-artifact@v7
+        with:
+          name: plan-${{ matrix.entorno }}
+          path: plan-${{ matrix.entorno }}.txt
+          retention-days: 7
+
+      - name: Planes binarios para el apply
+        uses: actions/upload-artifact@v7
+        with:
+          name: planes-${{ matrix.entorno }}
+          path: |
+            planes/${{ matrix.entorno }}
+            plan-${{ matrix.entorno }}.txt
+            mi-project/live/${{ matrix.entorno }}/*/.terraform.lock.hcl
+          include-hidden-files: true
+          retention-days: 7
+
+  apply:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: ${{ matrix.entorno }} # acá frena y pide aprobación
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        entorno: [dev, qa]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+        with:
+          role-arn: ${{ vars.AWS_ROLE_APPLY_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: planes-${{ matrix.entorno }}
+          path: .
+
+      - name: Plan aprobado
+        run: cat "plan-${{ matrix.entorno }}.txt"
+
+      - name: terragrunt apply (mismo plan)
+        working-directory: mi-project/live/${{ matrix.entorno }}
+        env:
+          PLANES: ${{ github.workspace }}/planes/${{ matrix.entorno }}
+          TG_NON_INTERACTIVE: "true"
+          TG_NO_TIPS: "true"
+          TG_PROVIDER_CACHE: "1"
+        run: |
+          if [ -z "$(find "$PLANES" -name tfplan.tfplan)" ]; then
+            echo "Nada para aplicar."
+            exit 0
+          fi
+
+          # Las unidades pendientes no tienen plan: se excluyen.
+          filtros=()
+          while read -r unidad; do
+            [ -n "$unidad" ] && filtros+=(--filter "!./$unidad")
+          done < "$PLANES/pendientes"
+
+          terragrunt run --all apply --out-dir "$PLANES" "${filtros[@]}" -- -input=false -no-color
+
+          if [ -s "$PLANES/pendientes" ]; then
+            echo "::warning::Quedó pendiente: $(paste -sd, "$PLANES/pendientes"). Corré de nuevo Actions → Apply → Run workflow."
+          fi
+
+      - name: Si falló
+        if: failure()
+        run: |
+          echo "### ❌ Apply \`${{ matrix.entorno }}\` falló" >> "$GITHUB_STEP_SUMMARY"
+          echo "Si dice **Saved plan is stale**, el state cambió: corré Actions → Apply → Run workflow y aprobá el plan nuevo." >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,53 @@
+name: Plan de un entorno
+description: Corre terragrunt plan, guarda los planes binarios en planes/<entorno> y el texto en plan-<entorno>.txt.
+
+inputs:
+  entorno:
+    description: Entorno (dev o qa).
+    required: true
+
+outputs:
+  resumen:
+    description: Una línea por unidad (Plan / No changes).
+    value: ${{ steps.plan.outputs.resumen }}
+
+runs:
+  using: composite
+  steps:
+    - name: terragrunt plan
+      id: plan
+      shell: bash
+      working-directory: mi-project/live/${{ inputs.entorno }}
+      env:
+        ENTORNO: ${{ inputs.entorno }}
+        PLANES: ${{ github.workspace }}/planes/${{ inputs.entorno }}
+        TXT: ${{ github.workspace }}/plan-${{ inputs.entorno }}.txt
+        TG_NON_INTERACTIVE: "true"
+        TG_NO_TIPS: "true"
+        TG_PROVIDER_CACHE: "1"
+      run: |
+        terragrunt run --all plan --out-dir "$PLANES" -- -input=false -no-color -lock-timeout=60s
+
+        : > "$TXT"
+        : > "$PLANES/pendientes"
+        resumen=""
+        for plan in $(find "$PLANES" -name tfplan.tfplan | sort); do
+          unidad=$(basename "$(dirname "$plan")")
+          salida=$(cd "$unidad" && TG_TF_FORWARD_STDOUT=true terragrunt show -no-color "$plan")
+          printf '===== %s/%s =====\n%s\n\n' "$ENTORNO" "$unidad" "$salida" >> "$TXT"
+          linea=$(grep -m1 -E '^(Plan:|No changes\.)' <<< "$salida" || true)
+
+          # Usa valores de relleno (su dependencia todavía no existe): no se aplica en esta corrida.
+          if grep -q 'mock-' <<< "$salida"; then
+            rm "$plan"
+            echo "$unidad" >> "$PLANES/pendientes"
+            linea="$linea ⏳ pendiente: se aplica en la próxima corrida"
+          fi
+          resumen+="- \`$unidad\`: $linea"$'\n'
+        done
+
+        {
+          echo "resumen<<FIN"
+          printf '%s' "$resumen"
+          echo "FIN"
+        } >> "$GITHUB_OUTPUT"

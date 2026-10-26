@@ -1,0 +1,46 @@
+name: Preparar herramientas
+description: Instala Terraform y Terragrunt (versiones del repo) y, si se pasa un rol, entra a AWS por OIDC.
+
+inputs:
+  role-arn:
+    description: Rol de AWS a asumir. Vacío = sin AWS.
+    required: false
+    default: ""
+  aws-region:
+    description: Región de AWS.
+    required: false
+    default: us-east-1
+
+runs:
+  using: composite
+  steps:
+    - name: Leer versiones
+      id: versiones
+      shell: bash
+      run: |
+        echo "terraform=$(cat mi-project/.terraform-version)" >> "$GITHUB_OUTPUT"
+        echo "terragrunt=$(cat mi-project/.terragrunt-version)" >> "$GITHUB_OUTPUT"
+
+    - name: Instalar Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_version: ${{ steps.versiones.outputs.terraform }}
+        terraform_wrapper: false
+
+    - name: Instalar Terragrunt
+      shell: bash
+      env:
+        VERSION: ${{ steps.versiones.outputs.terragrunt }}
+      run: |
+        url="https://github.com/gruntwork-io/terragrunt/releases/download/v${VERSION}"
+        curl -fsSLo "$RUNNER_TEMP/terragrunt_linux_amd64" "$url/terragrunt_linux_amd64"
+        curl -fsSL "$url/SHA256SUMS" | grep ' terragrunt_linux_amd64$' | (cd "$RUNNER_TEMP" && sha256sum -c -)
+        sudo install -m 0755 "$RUNNER_TEMP/terragrunt_linux_amd64" /usr/local/bin/terragrunt
+        terragrunt --version
+
+    - name: Entrar a AWS (OIDC)
+      if: inputs.role-arn != ''
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        aws-region: ${{ inputs.aws-region }}

@@ -1,0 +1,100 @@
+# Etapas 1 y 2: en cada PR hacia main, validar y planear. Nunca aplica.
+name: PR
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive
+
+      - name: terragrunt hcl fmt
+        run: |
+          (cd mi-project && terragrunt hcl fmt --check)
+          (cd bootstrap && terragrunt hcl fmt --check)
+
+      - name: terraform init -backend=false + validate
+        env:
+          TF_PLUGIN_CACHE_DIR: ${{ runner.temp }}/plugins
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          for m in mi-project/modules/*/ bootstrap/modules/*/; do
+            [ -f "$m/main.tf" ] || continue   # módulos vacíos (pendientes)
+            echo "::group::$m"
+            terraform -chdir="$m" init -backend=false -input=false
+            terraform -chdir="$m" validate
+            echo "::endgroup::"
+          done
+
+  plan:
+    needs: validar
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write       # OIDC con AWS
+      pull-requests: write  # comentario con el plan
+    strategy:
+      fail-fast: false
+      matrix:
+        entorno: [dev, qa]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup
+        with:
+          role-arn: ${{ vars.AWS_ROLE_PLAN_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      - id: plan
+        uses: ./.github/actions/plan
+        with:
+          entorno: ${{ matrix.entorno }}
+
+      - name: Plan en txt (descargable)
+        uses: actions/upload-artifact@v7
+        with:
+          name: plan-${{ matrix.entorno }}
+          path: plan-${{ matrix.entorno }}.txt
+          retention-days: 7
+
+      - name: Resumen
+        env:
+          ENTORNO: ${{ matrix.entorno }}
+          RESUMEN: ${{ steps.plan.outputs.resumen }}
+        run: printf '### Plan %s\n%s\n' "$ENTORNO" "$RESUMEN" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comentar en el PR
+        uses: actions/github-script@v9
+        env:
+          ENTORNO: ${{ matrix.entorno }}
+          RESUMEN: ${{ steps.plan.outputs.resumen }}
+        with:
+          script: |
+            const { ENTORNO, RESUMEN } = process.env;
+            const marca = `<!-- plan-${ENTORNO} -->`;
+            const corrida = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `${marca}\n### Plan \`${ENTORNO}\` (${context.sha.slice(0, 7)})\n${RESUMEN}\n` +
+              `Plan completo: artefacto **plan-${ENTORNO}** en [esta corrida](${corrida}).`;
+            const issue_number = context.issue.number;
+            const { data: comentarios } = await github.rest.issues.listComments({ ...context.repo, issue_number });
+            const previo = comentarios.find(c => c.body.includes(marca));
+            if (previo) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: previo.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number, body });
+            }

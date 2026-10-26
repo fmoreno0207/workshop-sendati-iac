@@ -1,0 +1,11 @@
+# Cachés y artefactos locales de Terraform/Terragrunt
+.terragrunt-cache/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Salidas del pipeline si se corren a mano
+planes/
+plan-*.txt
