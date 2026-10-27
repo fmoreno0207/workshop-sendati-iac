@@ -11,5 +11,7 @@ locals {
     Proyecto  = local.name_prefix
     Entorno   = local.environment
     ManagedBy = "terraform"
+    Demo      = "workshop"
+
   }
 }
