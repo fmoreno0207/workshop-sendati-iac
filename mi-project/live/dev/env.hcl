@@ -12,6 +12,7 @@ locals {
     Entorno   = local.environment
     ManagedBy = "terraform"
     Demo      = "workshop-terraform"
+    Fernando = "Moreno"
 
   }
 }
