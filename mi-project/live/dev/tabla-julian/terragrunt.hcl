@@ -14,8 +14,8 @@ locals {
     local.env_vars.locals.tags_base,
     {
       Componente = local.component
-      Owner = "julian"
-      //Uso        = "demo"
+      Owner      = "julian"
+      //Uso      = "demo"
     }
   )
 }
